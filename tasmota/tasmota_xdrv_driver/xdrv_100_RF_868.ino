@@ -29,7 +29,22 @@
 
 #define XDRV_100 100
 
-#include "cc1101.h"
+//#include "cc1101.h"
+//#include <RadioLib.h>
+#define USE_CC1101
+#define PIN_RECEIVER_CS   15
+
+// CC1101: GDO0 / RFM95W/SX127x: G0
+#define PIN_RECEIVER_IRQ  4
+
+// CC1101: GDO2 / RFM95W/SX127x: G1
+#define PIN_RECEIVER_GPIO 5
+
+// RFM95W/SX127x - GPIOxx / CC1101 - RADIOLIB_NC
+#define PIN_RECEIVER_RST  2
+#define NUM_SENSORS 1
+//#include "WeatherSensorCfg.h"
+#include "WeatherSensor.h"
 
 #define SYNC_WORD 199
 
@@ -42,8 +57,8 @@ const char kJaroliftCommands[] PROGMEM = "Keeloq|" // prefix
 void (* const jaroliftCommand[])(void) PROGMEM = {
   &CmndSendRaw, &CmdSendButton, &CmdSet};
 
-CC1101 cc1101;
-
+//CC1101 cc1101;
+WeatherSensor weatherSensor;
 struct JAROLIFT_DEVICE {
   int device_key_msb       = 0x0; // stores cryptkey MSB
   int device_key_lsb       = 0x0; // stores cryptkey LSB
@@ -57,224 +72,124 @@ struct JAROLIFT_DEVICE {
   int8_t port_rx;
 } jaroliftDevice;
 
-void CmdSet(void)
-{
-  if (XdrvMailbox.data_len > 0) {
-    if (XdrvMailbox.payload > 0) {
-      char *p;
-      uint32_t i = 0;
-      uint32_t param[4] = { 0 };
-      for (char *str = strtok_r(XdrvMailbox.data, ", ", &p); str && i < 4; str = strtok_r(nullptr, ", ", &p)) {
-        param[i] = strtoul(str, nullptr, 0);
-        i++;
+void init_RF868(){
+     weatherSensor.begin();
+}
+void loop_RF868(){
+  weatherSensor.clearSlots(); 
+    // This example uses only a single slot in the sensor data array
+    int const i=0;
+
+    // Clear all sensor data
+    weatherSensor.clearSlots();
+
+    // Tries to receive radio message (non-blocking) and to decode it.
+    // Timeout occurs after a small multiple of expected time-on-air.
+    int decode_status = weatherSensor.getMessage();
+    AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("RF868: Message %02d"),decode_status);
+/*
+    if (decode_status == DECODE_OK) {
+    
+      Serial.printf("Id: [%8X] Typ: [%X] Battery: [%s] ",
+          weatherSensor.sensor[i].sensor_id,
+          weatherSensor.sensor[i].s_type,
+          weatherSensor.sensor[i].battery_ok ? "OK " : "Low");
+      #ifdef BRESSER_6_IN_1
+          Serial.printf("Ch: [%d] ", weatherSensor.sensor[i].chan);
+      #endif
+      if (weatherSensor.sensor[i].temp_ok) {
+          Serial.printf("Temp: [%5.1fC] ",
+              weatherSensor.sensor[i].temp_c);
+      } else {
+          Serial.printf("Temp: [---.-C] ");
       }
-      for (uint32_t i = 0; i < 3; i++) {
-        if (param[i] < 1) { param[i] = 1; }  // msb, lsb, serial, counter
+      if (weatherSensor.sensor[i].humidity_ok) {
+     //     Serial.printf("Hum: [%3d%%] ",
+     //         weatherSensor.sensor[i].humidity);
       }
-      DEBUG_DRIVER_LOG(PSTR("KLQ: params %08x %08x %08x %08x"), param[0], param[1], param[2], param[3]);
-      Settings->keeloq_master_msb = param[0];
-      Settings->keeloq_master_lsb = param[1];
-      Settings->keeloq_serial = param[2];
-      Settings->keeloq_count = param[3];
-
-      jaroliftDevice.serial = param[2];
-      jaroliftDevice.count = param[3];
-
-      GenerateDeviceCryptKey();
-      ResponseCmndDone();
-    } else {
-      DEBUG_DRIVER_LOG(PSTR("KLQ: no payload"));
-    }
-  } else {
-    DEBUG_DRIVER_LOG(PSTR("KLQ: no param"));
-  }
-}
-
-void GenerateDeviceCryptKey()
-{
-  Keeloq k(Settings->keeloq_master_msb, Settings->keeloq_master_lsb);
-  jaroliftDevice.device_key_msb = k.decrypt(jaroliftDevice.serial | 0x60000000L);
-  jaroliftDevice.device_key_lsb = k.decrypt(jaroliftDevice.serial | 0x20000000L);
-
-  AddLog(LOG_LEVEL_DEBUG, PSTR("KLQ: generated device keys %08x %08x"), jaroliftDevice.device_key_msb, jaroliftDevice.device_key_lsb);
-}
-
-void CmdSendButton(void)
-{
-  noInterrupts();
-  entertx();
-
-  if (XdrvMailbox.data_len > 0)
-  {
-    if (XdrvMailbox.payload > 0)
-    {
-      jaroliftDevice.button = strtoul(XdrvMailbox.data, nullptr, 0);
-      DEBUG_DRIVER_LOG(PSTR("KLQ: msb %08x, lsb %08x, serial %08x, disc %08x, button %08x"),
-        jaroliftDevice.device_key_msb, jaroliftDevice.device_key_lsb, jaroliftDevice.serial, jaroliftDevice.disc, jaroliftDevice.button);
-      AddLog(LOG_LEVEL_DEBUG, PSTR("KLQ: count %08x"), jaroliftDevice.count);
-
-      CreateKeeloqPacket();
-      jaroliftDevice.count++;
-      Settings->keeloq_count = jaroliftDevice.count;
-
-      for(int repeat = 0; repeat <= 1; repeat++)
-      {
-        uint64_t bitsToSend = jaroliftDevice.pack;
-        digitalWrite(jaroliftDevice.port_tx, LOW);
-        delayMicroseconds(1150);
-        SendSyncPreamble(13);
-        delayMicroseconds(3500);
-        for(int i=72; i>0; i--)
-        {
-          SendBit(bitsToSend & 0x0000000000000001);
-          bitsToSend >>= 1;
-        }
-        DEBUG_DRIVER_LOG(PSTR("KLQ: finished sending bits at %d"), micros());
-
-        delay(16); // delay in loop context is save for wdt
+      else {
+      //    Serial.printf("Hum: [---%%] ");
       }
-    }
-  }
-
-  interrupts();
-  enterrx();
-
-  ResponseCmndDone();
-}
-
-void SendBit(byte bitToSend)
-{
-  if (bitToSend==1)
-  {
-    digitalWrite(jaroliftDevice.port_tx, LOW);  // Simple encoding of bit state 1
-    delayMicroseconds(Lowpulse);
-    digitalWrite(jaroliftDevice.port_tx, HIGH);
-    delayMicroseconds(Highpulse);
-  }
-  else
-  {
-    digitalWrite(jaroliftDevice.port_tx, LOW);  // Simple encoding of bit state 0
-    delayMicroseconds(Highpulse);
-    digitalWrite(jaroliftDevice.port_tx, HIGH);
-    delayMicroseconds(Lowpulse);
-  }
-}
-
-void CmndSendRaw(void)
-{
-  DEBUG_DRIVER_LOG(PSTR("KLQ: cmd send called at %d"), micros());
-  noInterrupts();
-  entertx();
-  for(int repeat = 0; repeat <= 1; repeat++)
-  {
-    if (XdrvMailbox.data_len > 0)
-    {
-      digitalWrite(jaroliftDevice.port_tx, LOW);
-      delayMicroseconds(1150);
-      SendSyncPreamble(13);
-      delayMicroseconds(3500);
-
-      for(int i=XdrvMailbox.data_len-1; i>=0; i--)
-      {
-        SendBit(XdrvMailbox.data[i] == '1');
+      if (weatherSensor.sensor[i].wind_ok) {
+      //    Serial.printf("Wind max: [%4.1fm/s] Wind avg: [%4.1fm/s] Wind dir: [%5.1fdeg] ",
+      //            weatherSensor.sensor[i].wind_gust_meter_sec,
+      //            weatherSensor.sensor[i].wind_avg_meter_sec,
+      //            weatherSensor.sensor[i].wind_direction_deg);
+      } else {
+     //     Serial.printf("Wind max: [--.-m/s] Wind avg: [--.-m/s] Wind dir: [---.-deg] ");
       }
-      DEBUG_DRIVER_LOG(PSTR("KLQ: finished sending bits at %d"), micros());
-
-      delay(16);                       // delay in loop context is save for wdt
-    }
-    interrupts();
-  }
-  enterrx();
-  ResponseCmndDone();
+      if (weatherSensor.sensor[i].rain_ok) {
+       //   Serial.printf("Rain: [%7.1fmm] ",  
+       //       weatherSensor.sensor[i].rain_mm);
+      } else {
+        //  Serial.printf("Rain: [-----.-mm] "); 
+      }
+      if (weatherSensor.sensor[i].moisture_ok) {
+      //    Serial.printf("Moisture: [%2d%%] ",
+       //       weatherSensor.sensor[i].moisture);
+      }
+      else {
+          Serial.printf("Moisture: [--%%] ");
+      }
+      #if defined BRESSER_6_IN_1 || defined BRESSER_7_IN_1
+      if (weatherSensor.sensor[i].uv_ok) {
+     //     Serial.printf("UV index: [%1.1f] ",
+      //        weatherSensor.sensor[i].uv);
+      }
+      else {
+      //    Serial.printf("UV index: [-.-%%] ");
+      }
+      #endif
+      #ifdef BRESSER_7_IN_1
+      if (weatherSensor.sensor[i].light_ok) {
+       //   Serial.printf("Light (Klux): [%2.1fKlux] ",
+        //      weatherSensor.sensor[i].light_klx);
+      }
+      else {
+      //    Serial.printf("Light (lux): [--.-Klux] ");
+      }
+      #endif      
+     // Serial.printf("RSSI: [%5.1fdBm]\n", weatherSensor.sensor[i].rssi);
+    } // if (decode_status == DECODE_OK)
+    //delay(100);
+*/
 }
-
-void enterrx() {
-  unsigned char marcState = 0;
-  cc1101.setRxState();
-  delay(2);
-  unsigned long rx_time = micros();
-  while (((marcState = cc1101.readStatusReg(CC1101_MARCSTATE)) & 0x1F) != 0x0D )
-  {
-    if (micros() - rx_time > 50000) break; // Quit when marcState does not change...
-  }
-}
-
-void entertx() {
-  unsigned char marcState = 0;
-  cc1101.setTxState();
-  delay(2);
-  unsigned long rx_time = micros();
-  while (((marcState = cc1101.readStatusReg(CC1101_MARCSTATE)) & 0x1F) != 0x13 && 0x14 && 0x15)
-  {
-    if (micros() - rx_time > 50000) break; // Quit when marcState does not change...
-  }
-}
-
-void SendSyncPreamble(int l)
-{
-  for (int i = 0; i < l; ++i)
-  {
-    digitalWrite(jaroliftDevice.port_tx, LOW);
-    delayMicroseconds(400);
-    digitalWrite(jaroliftDevice.port_tx, HIGH);
-    delayMicroseconds(380);
-  }
-}
-
-void CreateKeeloqPacket()
-{
-  Keeloq k(jaroliftDevice.device_key_msb, jaroliftDevice.device_key_lsb);
-  unsigned int result = (jaroliftDevice.disc << 16) | jaroliftDevice.count;
-  jaroliftDevice.pack = (uint64_t)0;
-	jaroliftDevice.pack |= jaroliftDevice.serial & 0xfffffffL;
-	jaroliftDevice.pack |= (jaroliftDevice.button & 0xfL) << 28;
-  jaroliftDevice.pack <<= 32;
-
-  jaroliftDevice.enc = k.encrypt(result);
-  jaroliftDevice.pack |= jaroliftDevice.enc;
-
-  AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("KLQ: pack high %08x, low %08x"), jaroliftDevice.pack>>32, jaroliftDevice.pack);
-}
-
-void KeeloqInit()
-{
-  jaroliftDevice.port_tx = Pin(GPIO_CC1101_GDO2);              // Output port for transmission
-  jaroliftDevice.port_rx = Pin(GPIO_CC1101_GDO0);              // Input port for reception
-
-  DEBUG_DRIVER_LOG(PSTR("KLQ: cc1101.init()"));
-  delay(100);
-  cc1101.init();
-  AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("KLQ: CC1101 done"));
-  cc1101.setSyncWord(SYNC_WORD, false);
-  cc1101.setCarrierFreq(CFREQ_433);
-  cc1101.disableAddressCheck();
-
-  pinMode(jaroliftDevice.port_tx, OUTPUT);
-  pinMode(jaroliftDevice.port_rx, INPUT_PULLUP);
-
-  jaroliftDevice.serial = Settings->keeloq_serial;
-  jaroliftDevice.count = Settings->keeloq_count;
-  GenerateDeviceCryptKey();
-}
-
 /*********************************************************************************************\
  * Interface
 \*********************************************************************************************/
-bool Xdrv36(uint32_t function)
+bool Xdrv100(uint32_t function)
 {
-  if (!PinUsed(GPIO_CC1101_GDO0) || !PinUsed(GPIO_CC1101_GDO2)) { return false; }
+  
+  
+ // if (!PinUsed(GPIO_CC1101_GDO0) || !PinUsed(GPIO_CC1101_GDO2)) { return false; }
 
   bool result = false;
 
   switch (function) {
     case FUNC_COMMAND:
-      AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("KLQ: calling command"));
-      result = DecodeCommand(kJaroliftCommands, jaroliftCommand);
+      AddLog(LOG_LEVEL_DEBUG_MORE, PSTR("RF868: calling command"));
+      result = 0;// DecodeCommand(kJaroliftCommands, jaroliftCommand);
       break;
     case FUNC_INIT:
-      KeeloqInit();
-      DEBUG_DRIVER_LOG(PSTR("KLQ: init done"));
+   //   KeeloqInit();
+      AddLog(LOG_LEVEL_INFO, PSTR("RF868: Init start"));
+     
+      init_RF868();
+       AddLog(LOG_LEVEL_INFO, PSTR("RF868: Init done"));
+     
       break;
+    case FUNC_WEB_SENSOR:
+    #ifdef USE_WEBSERVER
+       //   TTGO_WebShow(0);
+    #endif
+      break;
+    case FUNC_JSON_APPEND:
+     // TTGO_WebShow(1);
+      break;
+    case FUNC_LOOP:
+    loop_RF868();
+     // TTGO_loop(1);
+      break;  
   }
 
   return result;

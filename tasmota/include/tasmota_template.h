@@ -1071,6 +1071,10 @@ const uint16_t kGpioNiceList[] PROGMEM = {
   AGPIO(GPIO_CC1101_GDO0),              // CC1101 pin for RX
   AGPIO(GPIO_CC1101_GDO2),              // CC1101 pin for RX
 #endif
+#ifdef USE_RF_868
+  AGPIO(GPIO_CC1101_GDO0),              // CC1101 pin for RX
+  AGPIO(GPIO_CC1101_GDO2),              // CC1101 pin for RX
+#endif
 #ifdef USE_HRXL
   AGPIO(GPIO_HRXL_RX),
 #endif
